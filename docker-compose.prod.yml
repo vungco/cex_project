@@ -1,0 +1,48 @@
+services:
+  cex-app:
+    build:
+      context: .
+      target: runner
+    env_file:
+      - .env.pro
+    networks:
+      - cex-network
+      - nginx-network
+    depends_on:
+      - db
+      - redis
+    restart: always
+
+  cex-db:
+    container_name: postgres-prod
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-cex}
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+    networks:
+      - cex-network
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  cex-redis:
+    container_name: redis-prod
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: <secure_password>
+    networks:
+      - cex-network
+    volumes:
+      - redisdata:/data
+    restart: always
+
+networks:
+  cex-network:
+    driver: bridge
+  nginx-network:
+    external: true
+
+volumes:
+  pgdata:
+  redisdata:

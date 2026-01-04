@@ -1,0 +1,41 @@
+services:
+  cex-be-dev:
+    container_name: cex-be-dev
+    build: .
+    image: cex-be-dev:${VERSION:-latest}
+    volumes:
+      - .:/app
+      - /app/node_modules
+    env_file:
+      - .env.dev
+    networks:
+      - cex-network
+      - nginx-network
+
+    depends_on:
+      - db
+      - redis
+    command: npm run start:dev
+
+  redis-dev:
+    container_name: redis-dev
+    image: redis:7-alpine
+    restart: always
+    env_file:
+      - .env.dev
+    networks:
+      - cex-network
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+networks:
+  cex-network:
+    driver: bridge
+  nginx-network:
+    external: true
+
+volumes:
+  pgdata:
+  redisdata:

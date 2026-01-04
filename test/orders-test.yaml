@@ -1,0 +1,25 @@
+config:
+  target: "http://localhost:8003"
+  phases:
+    - duration: 10        # chạy 10 giây
+      arrivalRate: 10     # 10 request mỗi giây
+      concurrency: 10     # 10 request đồng thời
+  defaults:
+    headers:
+      Content-Type: "application/json"
+
+scenarios:
+  - flow:
+      - post:
+          url: "/orders"
+          headers:
+            Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJhZjMyNWJiZi1kODU1LTQzNjktYTJhYi0zZDg0MzcyMDVhNGIiLCJlbWFpbCI6InNvbWV0aGluZ0BnbWFpbC5jb20iLCJyb2xlIjoidXNlciIsImlhdCI6MTc2MjgzNTgwMSwiZXhwIjoxNzYzNDQwNjAxfQ.ycWYDCkUt7wWWQCg_0j2mIDbkfusDR94pBM2kNLeJm8"
+          json:
+            symbol: "LVSUSDT"
+            side: "{{ $randomChoice(['BUY','SELL']) }}"
+            type: "{{ $randomChoice(['LIMIT','MARKET']) }}"
+            walletType: "SPOT"
+            price: "{{ $randomInt(10,100) }}"
+            quantity: "{{ $randomInt(1,10) }}"
+            quote_quantity: "{{ $randomInt(10,100) }}"
+            client_order_id: "order_{{ $randomInt(1000,9999) }}"

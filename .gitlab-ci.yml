@@ -1,0 +1,39 @@
+stages:
+  - deploy
+
+deploy_job:
+  stage: deploy
+  tags:
+    - linux
+  variables:
+    VERSION: "$CI_COMMIT_SHORT_SHA"
+    COMPOSE_CMD: "docker compose -f docker-compose.dev.yml --env-file .env.dev"
+  script:
+    # 1. Log bắt đầu
+    - echo "Starting deployment (DEV) for commit $VERSION"
+
+    # 2. Build image service
+    - echo "Building service cex-be-dev"
+    - $COMPOSE_CMD build cex-be-dev
+
+    # 3. Stop container cũ
+    - echo "Stopping old container"
+    - $COMPOSE_CMD stop cex-be-dev || echo "No container running"
+
+    # 4. Remove container cũ
+    - echo "Removing old container"
+    - $COMPOSE_CMD rm -f cex-be-dev || echo "No container to remove"
+
+    # 5. Start container mới
+    - echo "Starting new container"
+    - $COMPOSE_CMD up -d cex-be-dev
+
+    # 6. Cleanup image không dùng
+    - echo "Cleaning up unused images"
+    - docker image prune -f
+
+    # 7. Log deploy thành công
+    - echo "Deploy success for commit $VERSION"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'

@@ -1,0 +1,7 @@
+export enum QUEUE_PROCESSOR {
+  ORDER = 'ORDER',
+}
+
+export enum QUEUE_PROCESS{
+  ORDERCREATE = "ORDERCREATE"
+}
