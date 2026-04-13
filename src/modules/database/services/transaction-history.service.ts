@@ -1,4 +1,5 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { EntityManager } from 'typeorm';
 import { UserEntity } from '../entities';
 import { TokenEntity } from '../entities/token.entity';
 import {
@@ -7,7 +8,6 @@ import {
   TransactionType,
 } from '../entities/transaction-history.entity';
 import { TransactionHistoryReposirory } from '../repositories/transaction-history.repository';
-import { ClientProxy } from '@nestjs/microservices';
 
 export interface EmitResponHistoryDto {
   user: UserEntity;
@@ -33,6 +33,15 @@ export class TransactionHistoryService {
   async create(dto: EmitResponHistoryDto): Promise<TransactionHistoryEntity> {
     const tx = this.transactionHistoryRepository.create(dto);
     return await this.transactionHistoryRepository.save(tx);
+  }
+
+  async createWithManager(
+    manager: EntityManager,
+    dto: EmitResponHistoryDto,
+  ): Promise<TransactionHistoryEntity> {
+    const repo = manager.getRepository(TransactionHistoryEntity);
+    const tx = repo.create(dto);
+    return repo.save(tx);
   }
 
   async getAllByUser(user: UserEntity): Promise<TransactionHistoryEntity[]> {

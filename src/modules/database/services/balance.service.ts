@@ -59,57 +59,67 @@ export class BalanceService {
     amount: string,
     user_id: string,
   ) {
+    return this.dataSource.transaction(async (manager) =>
+      this.depositTokenWithManager(manager, wallet, token_id, amount, user_id),
+    );
+  }
+
+  async depositTokenWithManager(
+    manager: EntityManager,
+    wallet: WalletEntity,
+    token_id: string,
+    amount: string,
+    user_id: string,
+  ) {
     const user = await this.userRepo.findById(user_id);
     const token = await this.tokenService.findById(token_id);
 
-    return this.dataSource.transaction(async (mananger) => {
-      const balanceRepo = mananger.getRepository(BalanceEntity);
-      const ledgerRepo = mananger.getRepository(LedgerEntity);
-      const balance_lot = mananger.getRepository(BalanceLotEntity);
+    const balanceRepo = manager.getRepository(BalanceEntity);
+    const ledgerRepo = manager.getRepository(LedgerEntity);
+    const balance_lot = manager.getRepository(BalanceLotEntity);
 
-      await balanceRepo.query(
-        `
+    await balanceRepo.query(
+      `
         INSERT INTO balances (token_id, wallet_id, available, locked)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (token_id, wallet_id)
         DO UPDATE SET available = balances.available + EXCLUDED.available
         `,
-        [token.id, wallet.id, amount, 0],
+      [token.id, wallet.id, amount, 0],
+    );
+
+    let ledgerCreate = {};
+    if (token.asset === DEFAULT_ASSET) {
+      ledgerCreate = ledgerRepo.create({
+        token: token,
+        delta: amount,
+        reason: LedgerReason.DEPOSIT,
+        user,
+        description: descriptionType.SUCCESSFUL,
+      });
+    } else {
+      ledgerCreate = ledgerRepo.create({
+        token: token,
+        delta: amount,
+        priceUsdt: '0',
+        reason: LedgerReason.DEPOSIT,
+        user,
+        description: descriptionType.SUCCESSFUL,
+      });
+
+      await balance_lot.save(
+        balance_lot.create({
+          baseToken: token,
+          quantity: amount,
+          price: '0',
+          type: lotType.CONVERT,
+          wallet,
+        }),
       );
+    }
+    await ledgerRepo.save(ledgerCreate);
 
-      let ledgerCreate = {};
-      if (token.asset === DEFAULT_ASSET) {
-        ledgerCreate = ledgerRepo.create({
-          token: token,
-          delta: amount,
-          reason: LedgerReason.DEPOSIT,
-          user,
-          description: descriptionType.SUCCESSFUL,
-        });
-      } else {
-        ledgerCreate = ledgerRepo.create({
-          token: token,
-          delta: amount,
-          priceUsdt: '0',
-          reason: LedgerReason.DEPOSIT,
-          user,
-          description: descriptionType.SUCCESSFUL,
-        });
-
-        await balance_lot.save(
-          balance_lot.create({
-            baseToken: token,
-            quantity: amount,
-            price: '0',
-            type: lotType.CONVERT,
-            wallet,
-          }),
-        );
-      }
-      await ledgerRepo.save(ledgerCreate);
-
-      return { success: true };
-    });
+    return { success: true };
   }
 
   async create(body: BalacneDtoCreate): Promise<{

@@ -16,6 +16,8 @@ import { WithdrawController } from './controller/withdraw.controller';
 import { DepositWalletController } from './controller/deposit-wallet.controller';
 import { TransactionHistoryController } from './controller/transaction-history.controller';
 import { KafkaSubscriberService } from './services/kafka-subscriber.service';
+import { WalletDepositKafkaHandler } from './services/deposit.service';
+import { WalletDepositKafkaController } from './controller/wallet-deposit.kafka.controller';
 
 const controllers = [
   AuthController,
@@ -29,8 +31,9 @@ const controllers = [
   DepositWalletController,
   WithdrawController,
   TransactionHistoryController,
+  WalletDepositKafkaController,
 ];
-const services = [AuthService, KafkaSubscriberService];
+const services = [AuthService, KafkaSubscriberService, WalletDepositKafkaHandler];
 
 @Module({
   imports: [

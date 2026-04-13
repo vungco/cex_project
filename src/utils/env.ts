@@ -41,6 +41,7 @@ const envSchema = z.object({
   SERVICES_BLOCKCHAIN_URL: z.url().default('http://localhost:8000'),
 
   KAFKA_BROKERS: z.string().default('kafka://localhost:9092'),
+  KAFKA_WALLET_DEPOSIT_TOPIC: z.string().default('wallet.deposit.v1'),
 });
 
 // Parse process.env

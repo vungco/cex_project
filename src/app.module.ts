@@ -5,10 +5,12 @@ import { LoggerModule } from './modules/logger/logger.module';
 import { RedisModule } from './modules/redis/redis.module';
 import { ConfigModule } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { env } from './utils';
 
 @Module({
   imports: [
+    EventEmitterModule.forRoot({ global: true }),
     ConfigModule.forRoot({ isGlobal: true }),
     ApiModule,
     DatabaseModule,

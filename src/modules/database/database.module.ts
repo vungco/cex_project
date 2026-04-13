@@ -36,7 +36,6 @@ import {
   TickerEntity,
 } from './entities';
 import { RedisModule } from '../redis/redis.module';
-import { EventEmitterModule } from '@nestjs/event-emitter';
 import { Candle1mService } from './services/candle1m.service';
 import { TickerService } from './services/ticker.service';
 import { Candle5mRepository } from './repositories/candle5m.repository';
@@ -61,6 +60,9 @@ import { TransactionHistoryReposirory } from './repositories/transaction-history
 import { DepositWalletService } from './services/deposit-wallet.service';
 import { TransactionHistoryService } from './services/transaction-history.service';
 import { QueueProduceModule } from '../queue/queueProduce.module';
+import { ChainDepositInboxEntity } from './entities/chain-deposit-inbox.entity';
+import { ChainDepositInboxService } from './services/chain-deposit-inbox.service';
+import { DatabaseSeedService } from './seed/database-seed.service';
 
 const entities = [
   BalanceEntity,
@@ -80,6 +82,7 @@ const entities = [
   User_daily_pnlEntity,
   DepositWalletEntity,
   TransactionHistoryEntity,
+  ChainDepositInboxEntity,
 ];
 
 const repositories = [
@@ -103,6 +106,7 @@ const repositories = [
 ];
 
 const services = [
+  DatabaseSeedService,
   UserService,
   WalletService,
   BalanceService,
@@ -120,6 +124,7 @@ const services = [
   DepositWalletService,
   WithdrawService,
   TransactionHistoryService,
+  ChainDepositInboxService,
 ];
 
 @Module({
@@ -130,7 +135,6 @@ const services = [
     TypeOrmModule.forFeature([...entities]),
     QueueProduceModule,
     RedisModule,
-    EventEmitterModule.forRoot(),
     ClientsModule.register([
       {
         name: 'BLOCKCHAIN_SERVICE',
