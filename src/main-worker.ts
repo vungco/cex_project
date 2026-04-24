@@ -1,3 +1,4 @@
+import './polyfill-crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppWorkerModule } from './app-woker.module';
 

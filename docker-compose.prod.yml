@@ -1,3 +1,10 @@
+# CEX — production: build runner + DB + Redis + Zookeeper + Kafka.
+# docker compose -f docker-compose.prod.yml up -d --build
+# .env.pro: KAFKA_BROKERS bị ghi đè → kafka://cex-kafka:29092
+# nginx-network: bridge do compose tạo; gắn container nginx: docker network connect cex-prod_nginx-network <container>
+
+name: cex-prod
+
 services:
   cex-app:
     build:
@@ -5,44 +12,108 @@ services:
       target: runner
     env_file:
       - .env.pro
+    environment:
+      DB_HOST: cex-db
+      REDIS_HOST: cex-redis
+      KAFKA_BROKERS: kafka://cex-kafka:29092
     networks:
       - cex-network
       - nginx-network
     depends_on:
-      - db
-      - redis
+      cex-db:
+        condition: service_healthy
+      cex-redis:
+        condition: service_started
+      cex-kafka:
+        condition: service_healthy
     restart: always
 
   cex-db:
-    container_name: postgres-prod
     image: postgres:15-alpine
+    container_name: cex-pg-prod
     environment:
       POSTGRES_DB: ${DB_NAME:-cex}
-      POSTGRES_USER: ${DB_USER:-admin}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+      POSTGRES_USER: ${DB_USERNAME:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in env}
     networks:
       - cex-network
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-admin} -d ${DB_NAME:-cex}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: always
 
   cex-redis:
-    container_name: redis-prod
     image: redis:7-alpine
+    container_name: cex-redis-prod
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else exec redis-server --appendonly yes; fi'
     environment:
-      REDIS_PASSWORD: <secure_password>
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in env for prod}
     networks:
       - cex-network
     volumes:
-      - redisdata:/data
+      - redisdata_prod:/data
+    restart: always
+
+  cex-zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: cex-zk-prod
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - cex-network
+    volumes:
+      - zoo_data_prod:/var/lib/zookeeper/data
+    healthcheck:
+      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    restart: always
+
+  cex-kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: cex-kafka-prod
+    depends_on:
+      cex-zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: cex-zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://cex-kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - cex-network
+    volumes:
+      - kafka_data_prod:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server 127.0.0.1:9092 || exit 1"]
+      interval: 15s
+      timeout: 20s
+      retries: 12
+      start_period: 120s
     restart: always
 
 networks:
   cex-network:
     driver: bridge
   nginx-network:
-    external: true
+    driver: bridge
 
 volumes:
-  pgdata:
-  redisdata:
+  pgdata_prod:
+  redisdata_prod:
+  zoo_data_prod:
+  kafka_data_prod:

@@ -1,41 +1,134 @@
+# CEX — dev: DB + Redis + Zookeeper + Kafka + app (gắn nginx network).
+# docker compose -f docker-compose.dev.yml up -d
+# Mạng nginx-network do compose tạo (bridge). Nếu nginx nằm stack khác: docker network connect <tên_mạng> <container_nginx>
+# .env.dev: KAFKA_BROKERS bị ghi đè → kafka://kafka:29092
+
+name: cex-dev
+
 services:
-  cex-be-dev:
-    container_name: cex-be-dev
-    build: .
-    image: cex-be-dev:${VERSION:-latest}
-    volumes:
-      - .:/app
-      - /app/node_modules
-    env_file:
-      - .env.dev
-    networks:
-      - cex-network
-      - nginx-network
-
-    depends_on:
-      - db
-      - redis
-    command: npm run start:dev
-
-  redis-dev:
-    container_name: redis-dev
-    image: redis:7-alpine
-    restart: always
-    env_file:
-      - .env.dev
+  db:
+    image: postgres:15-alpine
+    container_name: cex-pg-dev
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-cex}
     networks:
       - cex-network
     ports:
-      - "6379:6379"
+      - "${DB_PORT:-5432}:5432"
     volumes:
-      - redisdata:/data
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-cex}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cex-redis-dev
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else exec redis-server --appendonly yes; fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    networks:
+      - cex-network
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata_dev:/data
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: cex-zk-dev
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - cex-network
+    volumes:
+      - zoo_data_dev:/var/lib/zookeeper/data
+    # Ncat trong image chặn four-letter words (ruok) — dùng cub zk-ready
+    healthcheck:
+      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: cex-kafka-dev
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - cex-network
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka_data_dev:/var/lib/kafka/data
+    # PLAINTEXT_HOST lắng 9092 — dùng cho health; 29092 là listener nội bộ tên "kafka:29092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server 127.0.0.1:9092 || exit 1"]
+      interval: 15s
+      timeout: 20s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+
+  cex-be-dev:
+    image: node:22-alpine
+    working_dir: /app
+    container_name: cex-be-dev
+    volumes:
+      - .:/app
+      - cex_node_modules_dev:/app/node_modules
+    env_file:
+      - .env.dev
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+      KAFKA_BROKERS: kafka://kafka:29092
+    networks:
+      - cex-network
+      - nginx-network
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    command: sh -c "npm ci && npm run start:dev"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
 
 networks:
   cex-network:
     driver: bridge
   nginx-network:
-    external: true
+    driver: bridge
 
 volumes:
-  pgdata:
-  redisdata:
+  pgdata_dev:
+  redisdata_dev:
+  cex_node_modules_dev:
+  zoo_data_dev:
+  kafka_data_dev:
