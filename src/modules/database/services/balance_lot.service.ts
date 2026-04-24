@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { BalanceLotRepository } from '../repositories/balance_lot.repository';
 import { BalanceLotEntity, WalletEntity } from '../entities';
+import { lotType } from '../entities/balane_lot.entity';
 import { TokenEntity } from '../entities/token.entity';
 import Decimal from 'decimal.js';
 import { EntityManager, Repository } from 'typeorm';
@@ -178,5 +179,25 @@ export class BalanceLotService {
         );
       }
     });
+  }
+
+  /**
+   * Hoàn lot sau khi rút on-chain thất bại (phải gọi cùng manager với bước trừ available).
+   */
+  async addRefundLot(
+    balanceLotRepo: Repository<BalanceLotEntity>,
+    wallet: WalletEntity,
+    baseToken: TokenEntity,
+    quantity: string,
+    price: string,
+  ): Promise<void> {
+    const row = balanceLotRepo.create({
+      wallet,
+      baseToken,
+      quantity,
+      price,
+      type: lotType.FUNDING,
+    });
+    await balanceLotRepo.save(row);
   }
 }

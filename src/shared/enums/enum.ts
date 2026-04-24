@@ -24,6 +24,12 @@ export enum DepositEvent {
   CREATE = 'CREATEDEPOSIT',
 }
 
+/** Cùng cơ chế thanh toán với nạp: `SpotPublicGateway` emit tới `socket` user */
+export enum WithdrawEvent {
+  /** Payload gồm `type: 'WITHDRAWAL_UPDATED'` (xem `WithdrawalUpdatedEmitDto`) */
+  UPDATED = 'WITHDRAWAL_UPDATED',
+}
+
 export enum MarketEvent {
   CREATE = 'market_token:create',
   UPDATE = 'market_token:update',

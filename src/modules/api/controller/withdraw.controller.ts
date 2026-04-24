@@ -33,10 +33,15 @@ export class WithdrawController {
   }
 
   @Post()
-  @ApiOperation({ summary: 'Tạo yêu cầu rút tiền từ sàn về ví người dùng' })
+  @ApiOperation({
+    summary: 'Tạo yêu cầu rút tiền từ sàn về ví người dùng',
+    description:
+      'Trừ số dư CEX trước, gọi ví nóng qua Kafka; có `txHash` thì WebSocket `WITHDRAWAL_UPDATED` tới user.',
+  })
   @ApiResponse({
     status: 201,
-    description: 'Tạo yêu cầu rút tiền thành công',
+    description:
+      'Rút thành công on-chain (broadcast). `withdrawalId` = `transaction_history.id`',
   })
   @ApiBearerAuth()
   @UseGuards(AuthGuard)
@@ -45,6 +50,7 @@ export class WithdrawController {
     @Body() dto: CreateWithdrawDto,
     @Request() req: any,
   ): Promise<{
+    withdrawalId: string;
     txHash: string;
     amount: string;
     fee: string;

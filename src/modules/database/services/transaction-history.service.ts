@@ -21,6 +21,23 @@ export interface EmitResponHistoryDto {
   fee: string;
 }
 
+/** Realtime rút: FE subscribe qua WebSocket cùng namespace `/spot` (auth JWT) */
+export interface WithdrawalUpdatedEmitDto {
+  type: 'WITHDRAWAL_UPDATED';
+  withdrawalId: string;
+  userId: string;
+  networkId: string;
+  status: TransactionStatus;
+  txHash: string | null;
+  amount: string;
+  fee: string;
+  toAddress: string;
+  tokenId: string;
+  tokenSymbol?: string;
+  /** Ghép với `explorerUrl` từ DB network trên wallet nếu cần; MVP để null */
+  explorerUrl: string | null;
+}
+
 @Injectable()
 export class TransactionHistoryService {
   constructor(

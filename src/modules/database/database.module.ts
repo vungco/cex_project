@@ -63,6 +63,7 @@ import { QueueProduceModule } from '../queue/queueProduce.module';
 import { ChainDepositInboxEntity } from './entities/chain-deposit-inbox.entity';
 import { ChainDepositInboxService } from './services/chain-deposit-inbox.service';
 import { DatabaseSeedService } from './seed/database-seed.service';
+import EventEmitter2 from 'eventemitter2';
 
 const entities = [
   BalanceEntity,
@@ -151,7 +152,11 @@ const services = [
     ]),
   ],
   controllers: [],
-  providers: [...repositories, ...services],
-  exports: [...repositories, ...services, ClientsModule],
+  providers: [
+    ...repositories,
+    ...services,
+    { provide: EventEmitter2, useValue: new EventEmitter2() },
+  ],
+  exports: [...repositories, ...services, ClientsModule, EventEmitter2],
 })
 export class DatabaseModule {}

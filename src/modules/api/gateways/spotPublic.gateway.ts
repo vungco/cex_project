@@ -15,7 +15,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { DepositEvent, MarketEvent, SpotEvent } from 'src/shared/enums/enum';
+import { DepositEvent, MarketEvent, SpotEvent, WithdrawEvent } from 'src/shared/enums/enum';
 import { WsAuth } from './ws-auth.guard';
 import EventEmitter2, { Listener } from 'eventemitter2';
 import { CandleData, tickerRedis, timeFrameCandles } from 'src/shared/constans';
@@ -32,7 +32,10 @@ import { RedisBaseService } from 'src/modules/redis/services/redis.base.service'
 import { RedisOrderBookService } from 'src/modules/redis/services/redis.orderbook.service';
 import { RedisCandleService } from 'src/modules/redis/services/redis.candle.service';
 import { RedisTickerService } from 'src/modules/redis/services/redis.ticker.service';
-import { EmitResponHistoryDto } from 'src/modules/database/services/transaction-history.service';
+import {
+  EmitResponHistoryDto,
+  WithdrawalUpdatedEmitDto,
+} from 'src/modules/database/services/transaction-history.service';
 
 interface JoinRoomData {
   symbol: string;
@@ -126,6 +129,13 @@ export class SpotPublicGateway
         DepositEvent.CREATE,
         (data: EmitResponHistoryDto) => {
           this.broadDepositCreate(data);
+        },
+      ) as Listener,
+
+      this.eventEmitter.on(
+        WithdrawEvent.UPDATED,
+        (data: WithdrawalUpdatedEmitDto) => {
+          this.broadWithdrawalUpdated(data);
         },
       ) as Listener,
     );
@@ -550,6 +560,16 @@ export class SpotPublicGateway
       const socket = this.clients.get(user_id);
       if (socket) {
         socket.emit(`${DepositEvent.CREATE}:${user_id}`, data);
+      }
+    }
+  }
+
+  private broadWithdrawalUpdated(data: WithdrawalUpdatedEmitDto) {
+    const user_id = data.userId;
+    if (this.clients.has(user_id)) {
+      const socket = this.clients.get(user_id);
+      if (socket) {
+        socket.emit(`${WithdrawEvent.UPDATED}:${user_id}`, data);
       }
     }
   }

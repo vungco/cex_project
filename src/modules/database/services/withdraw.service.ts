@@ -3,6 +3,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
@@ -18,12 +19,10 @@ import {
   descriptionType,
   LedgerEntity,
   LedgerReason,
-  lotType,
   UserEntity,
   WalletEntity,
   walletType,
 } from '../entities';
-import { TransactionHistoryReposirory } from '../repositories/transaction-history.repository';
 import {
   TransactionHistoryEntity,
   TransactionStatus,
@@ -36,9 +35,15 @@ import { WalletService } from './wallet.service';
 import { DEFAULT_ASSET } from 'src/shared/constans';
 import { RedisTickerService } from 'src/modules/redis/services/redis.ticker.service';
 import { BalanceLotService } from './balance_lot.service';
+import EventEmitter2 from 'eventemitter2';
+import { WithdrawEvent } from 'src/shared/enums/enum';
+import { WithdrawalUpdatedEmitDto } from './transaction-history.service';
+import { TokenEntity } from '../entities/token.entity';
 
 @Injectable()
 export class WithdrawService {
+  private readonly logger = new Logger(WithdrawService.name);
+
   constructor(
     private readonly tokenService: TokenService,
     private readonly walletService: WalletService,
@@ -48,12 +53,14 @@ export class WithdrawService {
     private readonly blockchainClient: ClientProxy,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    @Inject() private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async createWithdraw(
     dto: CreateWithdrawDto,
     user: UserEntity,
   ): Promise<{
+    withdrawalId: string;
     txHash: string;
     amount: string;
     fee: string;
@@ -64,29 +71,96 @@ export class WithdrawService {
   }> {
     const { token_id, network_id, to_address, amount } = dto;
 
-    try {
-      const feeToken: { fee: string; feeMin: string } = await firstValueFrom(
-        this.blockchainClient.send('feeTokenWithdraw', {
-          token_id,
-          network_id,
-        }),
-      );
+    const feeToken: { fee: string; feeMin: string } = await firstValueFrom(
+      this.blockchainClient.send('feeTokenWithdraw', {
+        token_id,
+        network_id,
+      }),
+    );
 
-      if (new Decimal(amount).lessThan(feeToken.feeMin)) {
-        throw new Error('Amount must be greater than minimum fee');
+    if (new Decimal(amount).lessThan(feeToken.feeMin)) {
+      throw new HttpException(
+        'Amount must be greater than minimum fee',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const token = await this.tokenService.findById(token_id);
+    const wallet = await this.walletService.getWallet(
+      walletType.FUNDING,
+      user,
+    );
+
+    if (!token) throw new NotFoundException('Token not found');
+    if (!wallet) throw new NotFoundException('Funding wallet not found');
+
+    const withdrawAmount = new Decimal(amount).minus(feeToken.fee).toString();
+
+    const pending = await this.dataSource.transaction(async (manager) => {
+      const balanceRepo = manager.getRepository(BalanceEntity);
+      const ledgerRepo = manager.getRepository(LedgerEntity);
+      const balanceLotRepo = manager.getRepository(BalanceLotEntity);
+      const txRepo = manager.getRepository(TransactionHistoryEntity);
+
+      const balance = await balanceRepo.findOne({
+        where: { wallet: { id: wallet.id }, token: { id: token.id } },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!balance) throw new NotFoundException('Balance not found');
+
+      if (new Decimal(balance.available).lessThan(amount)) {
+        throw new HttpException(
+          'Insufficient available balance',
+          HttpStatus.BAD_REQUEST,
+        );
       }
 
-      const token = await this.tokenService.findById(token_id);
-      const wallet = await this.walletService.getWallet(
-        walletType.FUNDING,
+      balance.available = new Decimal(balance.available).minus(amount).toString();
+      await balanceRepo.save(balance);
+
+      const ledgerData: Partial<LedgerEntity> = {
+        token,
+        delta: amount,
         user,
-      );
+        reason: LedgerReason.WITHDRAW,
+        description: descriptionType.SUCCESSFUL,
+      };
 
-      if (!token) throw new NotFoundException('Token not found');
-      if (!wallet) throw new NotFoundException('Funding wallet not found');
+      if (token.asset !== DEFAULT_ASSET) {
+        const ticker = await this.redisTickerService.getTicker(
+          `${token.asset}${DEFAULT_ASSET}`,
+        );
+        ledgerData.priceUsdt = ticker?.lastPrice;
+      }
 
-      const withdrawAmount = new Decimal(amount).minus(feeToken.fee).toString();
+      await ledgerRepo.save(ledgerRepo.create(ledgerData));
 
+      if (token.asset !== DEFAULT_ASSET) {
+        await this.balanceLotService.deductBalanceLotsAtomic(
+          balanceLotRepo,
+          token,
+          wallet,
+          amount,
+        );
+      }
+
+      const tx = txRepo.create({
+        user,
+        networkId: network_id,
+        token,
+        excuAddress: to_address,
+        amount,
+        fee: feeToken.fee,
+        txHash: null!,
+        status: TransactionStatus.PENDING,
+        type: TransactionType.WITHDRAWAL,
+      });
+      return txRepo.save(tx);
+    });
+
+    const grossAmount = amount;
+
+    try {
       const result: { txHash: string } = await firstValueFrom(
         this.blockchainClient.send('withdraw', {
           token,
@@ -94,93 +168,169 @@ export class WithdrawService {
           network_id,
           to_address,
           amount: withdrawAmount,
+          withdrawal_id: pending.id,
         }),
       );
 
-      // Transaction DB
-      const txHistory = await this.dataSource.transaction(async (manager) => {
-        const balanceRepo = manager.getRepository(BalanceEntity);
-        const ledgerRepo = manager.getRepository(LedgerEntity);
-        const balanceLotRepo = manager.getRepository(BalanceLotEntity);
+      const updated = await this.dataSource.transaction(async (manager) => {
         const txRepo = manager.getRepository(TransactionHistoryEntity);
-
-        const balance = await balanceRepo.findOne({
-          where: { wallet: { id: wallet.id }, token: { id: token.id } },
+        const row = await txRepo.findOne({
+          where: { id: pending.id },
+          relations: ['token', 'user'],
         });
-        if (!balance) throw new NotFoundException('Balance not found');
-
-        balance.available = new Decimal(balance.available)
-          .minus(amount)
-          .toString();
-        await balanceRepo.save(balance);
-
-        const ledgerData: Partial<LedgerEntity> = {
-          token,
-          delta: amount,
-          user,
-          reason: LedgerReason.WITHDRAW,
-          description: descriptionType.SUCCESSFUL,
-        };
-
-        if (token.asset !== DEFAULT_ASSET) {
-          const ticker = await this.redisTickerService.getTicker(
-            `${token.asset}${DEFAULT_ASSET}`,
-          );
-          ledgerData.priceUsdt = ticker?.lastPrice;
-        }
-
-        const ledger = ledgerRepo.create(ledgerData);
-        await ledgerRepo.save(ledger);
-
-        if (token.asset !== DEFAULT_ASSET) {
-          await this.balanceLotService.deductBalanceLotsAtomic(
-            balanceLotRepo,
-            token,
-            wallet,
-            amount,
-          );
-        }
-
-        const tx = txRepo.create({
-          user,
-          networkId: network_id,
-          token,
-          excuAddress: to_address,
-          amount,
-          fee: feeToken.fee,
-          txHash: result.txHash,
-          status: TransactionStatus.CONFIRMED,
-          type: TransactionType.WITHDRAWAL,
-        });
-        await txRepo.save(tx);
-
-        return tx;
+        if (!row) throw new NotFoundException('Pending withdraw row missing');
+        row.txHash = result.txHash;
+        row.status = TransactionStatus.BROADCASTED;
+        return txRepo.save(row);
       });
 
+      const forEmit = await this.dataSource.getRepository(TransactionHistoryEntity).findOne({
+        where: { id: updated.id },
+        relations: ['token', 'user'],
+      });
+      if (forEmit) {
+        this.emitPayload({
+          user: forEmit.user,
+          tx: forEmit,
+          networkId: network_id,
+          toAddress: to_address,
+          explorerUrl: null,
+        });
+      }
+
       return {
-        txHash: txHistory.txHash,
-        amount: txHistory.amount,
-        fee: txHistory.fee,
+        withdrawalId: updated.id,
+        txHash: updated.txHash,
+        amount: updated.amount,
+        fee: updated.fee,
         tokenId: token.id,
         networkId: network_id,
-        status: txHistory.status,
-        type: txHistory.type,
+        status: updated.status,
+        type: updated.type,
       };
     } catch (error) {
-      console.error('Blockchain withdraw failed:', error);
+      this.logger.warn(
+        `Withdraw on-chain failed for pendingTx=${pending.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+
+      await this.compensateAfterChainFailure(
+        pending.id,
+        user,
+        wallet,
+        token,
+        grossAmount,
+      );
+
+      const failed = await this.dataSource
+        .getRepository(TransactionHistoryEntity)
+        .findOne({ where: { id: pending.id }, relations: ['token', 'user'] });
+
+      if (failed) {
+        this.emitPayload({
+          user,
+          tx: failed,
+          networkId: network_id,
+          toAddress: to_address,
+          explorerUrl: null,
+        });
+      }
+
       if (error instanceof RpcException) throw error;
+      if (error instanceof HttpException) throw error;
 
       throw new HttpException(
-        error?.message || 'Blockchain withdraw failed',
+        (error as { message?: string })?.message || 'Blockchain withdraw failed',
         HttpStatus.BAD_REQUEST,
       );
     }
   }
 
+  private async compensateAfterChainFailure(
+    transactionId: string,
+    user: UserEntity,
+    wallet: WalletEntity,
+    token: TokenEntity,
+    grossAmount: string,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const balanceRepo = manager.getRepository(BalanceEntity);
+      const ledgerRepo = manager.getRepository(LedgerEntity);
+      const balanceLotRepo = manager.getRepository(BalanceLotEntity);
+      const txRepo = manager.getRepository(TransactionHistoryEntity);
+
+      const balance = await balanceRepo.findOne({
+        where: { wallet: { id: wallet.id }, token: { id: token.id } },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (balance) {
+        balance.available = new Decimal(balance.available)
+          .plus(grossAmount)
+          .toString();
+        await balanceRepo.save(balance);
+      }
+
+      const refundLedger: Partial<LedgerEntity> = {
+        token,
+        delta: grossAmount,
+        user,
+        reason: LedgerReason.REFUND,
+        description: descriptionType.SUCCESSFUL,
+      };
+      if (token.asset !== DEFAULT_ASSET) {
+        const ticker = await this.redisTickerService.getTicker(
+          `${token.asset}${DEFAULT_ASSET}`,
+        );
+        refundLedger.priceUsdt = ticker?.lastPrice;
+        const price = ticker?.lastPrice ?? '0';
+        await this.balanceLotService.addRefundLot(
+          balanceLotRepo,
+          wallet,
+          token,
+          grossAmount,
+          price,
+        );
+      }
+      await ledgerRepo.save(ledgerRepo.create(refundLedger));
+
+      const row = await txRepo.findOne({ where: { id: transactionId } });
+      if (row) {
+        row.status = TransactionStatus.FAILED;
+        await txRepo.save(row);
+      }
+    });
+  }
+
+  private emitPayload(arg: {
+    user: UserEntity;
+    tx: TransactionHistoryEntity;
+    networkId: string;
+    toAddress: string;
+    explorerUrl: string | null;
+  }): void {
+    const t = arg.tx.token;
+    const payload: WithdrawalUpdatedEmitDto = {
+      type: 'WITHDRAWAL_UPDATED',
+      withdrawalId: arg.tx.id,
+      userId: arg.user.id,
+      networkId: arg.networkId,
+      status: arg.tx.status,
+      txHash: arg.tx.txHash,
+      amount: arg.tx.amount,
+      fee: arg.tx.fee,
+      toAddress: arg.toAddress,
+      tokenId: t.id,
+      tokenSymbol: t.asset,
+      explorerUrl: arg.explorerUrl,
+    };
+    this.eventEmitter.emit(WithdrawEvent.UPDATED, payload);
+  }
+
   async caculatorFee(dto: CaculatorFeeDto) {
     const token = await this.tokenService.findById(dto.token_id);
 
-    const data: any = {
+    const data: Record<string, unknown> = {
       token,
       network_id: dto.network_id,
       amount: dto.amount,
@@ -190,11 +340,11 @@ export class WithdrawService {
       const result = await firstValueFrom(
         this.blockchainClient.send('caculatorFee', data),
       );
-      console.log('result: ', result);
+      this.logger.log(`caculatorFee result received for token ${dto.token_id}`);
 
       return result;
     } catch (error) {
-      console.error('Blockchain caculatorFee error:', error);
+      this.logger.error('Blockchain caculatorFee error:', error as Error);
     }
   }
 }
