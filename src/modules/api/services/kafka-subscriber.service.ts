@@ -9,7 +9,12 @@ export class KafkaSubscriberService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const topics = ['getToken', 'feeTokenWithdraw', 'caculatorFee'];
+    const topics = [
+      'getToken',
+      'feeTokenWithdraw',
+      'caculatorFee',
+      'withdraw',
+    ];
 
     topics.forEach((topic) => {
       this.blockchainClient.subscribeToResponseOf(topic);
