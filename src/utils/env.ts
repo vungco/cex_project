@@ -37,9 +37,6 @@ const envSchema = z.object({
   passwordAdmin: z.string().min(1, 'passwordAdmin is required'),
   roleAdmin: z.string().min(1, 'roleAdmin is required'),
 
-  SERVICES_URL: z.url().default('http://localhost:7000'),
-  SERVICES_BLOCKCHAIN_URL: z.url().default('http://localhost:8000'),
-
   KAFKA_BROKERS: z.string().default('kafka://localhost:9092'),
   KAFKA_WALLET_DEPOSIT_TOPIC: z.string().default('wallet.deposit.v1'),
 });
