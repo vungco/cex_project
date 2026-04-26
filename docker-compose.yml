@@ -102,6 +102,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  worker:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+      KAFKA_BROKERS: kafka://kafka:29092
+    command: sh -c "npm ci && npm run start:dev:worker"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

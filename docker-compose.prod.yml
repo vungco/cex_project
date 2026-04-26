@@ -28,6 +28,29 @@ services:
         condition: service_healthy
     restart: always
 
+  cex-worker:
+    build:
+      context: .
+      target: runner
+    env_file:
+      - .env.pro
+    environment:
+      DB_HOST: cex-db
+      REDIS_HOST: cex-redis
+      KAFKA_BROKERS: kafka://cex-kafka:29092
+    networks:
+      - cex-network
+      - nginx-network
+    command: ["node", "dist/main-worker.js"]
+    depends_on:
+      cex-db:
+        condition: service_healthy
+      cex-redis:
+        condition: service_started
+      cex-kafka:
+        condition: service_healthy
+    restart: always
+
   cex-db:
     image: postgres:15-alpine
     container_name: cex-pg-prod

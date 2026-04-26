@@ -120,6 +120,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  cex-worker-dev:
+    image: node:22-alpine
+    working_dir: /app
+    container_name: cex-worker-dev
+    volumes:
+      - .:/app
+      - cex_node_modules_dev:/app/node_modules
+    env_file:
+      - .env.dev
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+      KAFKA_BROKERS: kafka://kafka:29092
+    networks:
+      - cex-network
+      - nginx-network
+    command: sh -c "npm ci && npm run start:dev:worker"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
 networks:
   cex-network:
     driver: bridge
