@@ -2,10 +2,25 @@ import './polyfill-crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
-import { ValidationPipe } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { env, parseKafkaBrokers } from './utils';
+
+function buildSwaggerDocument(app: INestApplication) {
+  let builder = new DocumentBuilder()
+    .setTitle('API Docs')
+    .setDescription('API documentation')
+    .setVersion('1.0')
+    .addBearerAuth();
+
+  if (env.SWAGGER_SERVER_URL) {
+    builder = builder.addServer(env.SWAGGER_SERVER_URL);
+  }
+
+  const config = builder.build();
+  return SwaggerModule.createDocument(app, config);
+}
 
 async function waitKafkaReady(brokers: string[], retries = 5, delay = 2000) {
   const { Kafka } = await import('kafkajs');
@@ -51,15 +66,8 @@ async function bootstrap() {
   // Use global validation pipe
   app.useGlobalPipes(new ValidationPipe());
 
-  // Swagger setup
-  const config = new DocumentBuilder()
-    .setTitle('API Docs')
-    .setDescription('API documentation')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('/api/docs', app, document);
+  const document = buildSwaggerDocument(app);
+  SwaggerModule.setup(env.SWAGGER_PATH, app, document);
 
   await app.startAllMicroservices();
   await app.listen(process.env.PORT ?? 3000);

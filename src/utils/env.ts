@@ -39,6 +39,20 @@ const envSchema = z.object({
 
   KAFKA_BROKERS: z.string().default('kafka://localhost:9092'),
   KAFKA_WALLET_DEPOSIT_TOPIC: z.string().default('wallet.deposit.v1'),
+
+  /** Swagger UI path without leading slash (e.g. api/docs). */
+  SWAGGER_PATH: z
+    .string()
+    .default('api/docs')
+    .transform((s) => s.replace(/^\/+/, '') || 'api/docs'),
+
+  /**
+   * OpenAPI server URL for Swagger “Try it out” (use public URL behind nginx), e.g. https://host/cex
+   */
+  SWAGGER_SERVER_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 // Parse process.env
