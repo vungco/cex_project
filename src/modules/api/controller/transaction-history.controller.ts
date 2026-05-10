@@ -1,5 +1,5 @@
 import { Controller, Get, Request, UseGuards } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags,ApiBearerAuth } from '@nestjs/swagger';
 import { TransactionHistoryEntity } from 'src/modules/database/entities/transaction-history.entity';
 import { TransactionHistoryService } from 'src/modules/database/services/transaction-history.service';
 import { AuthGuard } from '../guards/auth.guard';
