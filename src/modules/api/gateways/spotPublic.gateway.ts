@@ -69,6 +69,16 @@ export class SpotPublicGateway
 
   private readonly logger = new Logger(SpotPublicGateway.name);
 
+  /** Bật log chi tiết WS/Redis: development, hoặc `SPOT_WS_DEBUG=1|true` (tạm prod). */
+  private readonly devWsLogEnabled =
+    process.env.NODE_ENV === 'development' ||
+    process.env.SPOT_WS_DEBUG === '1' ||
+    process.env.SPOT_WS_DEBUG === 'true';
+
+  private devLog(message: string): void {
+    if (this.devWsLogEnabled) this.logger.log(`[dev-ws] ${message}`);
+  }
+
   private clients: Map<string, Socket> = new Map();
   private clientRoom: Map<string, string> = new Map();
   private roomClients: Map<string, Set<string>> = new Map();
@@ -94,7 +104,7 @@ export class SpotPublicGateway
   ) {}
 
   async onModuleInit() {
-    this.logger.log('✅ SpotPublicGateway initialized');
+    this.devLog('✅ SpotPublicGateway initialized');
     const marketTokens = await this.marketTokenService.getAll();
 
     for (const mt of marketTokens) {
@@ -216,7 +226,7 @@ export class SpotPublicGateway
     if (this.roomClients.has(symbol)) return;
     this.roomClients.set(symbol, new Set());
     this.roomTimeframes.set(symbol, new Set(timeFrameCandles));
-    this.logger.log(`Created WS room for market: ${symbol}`);
+    this.devLog(`Created WS room for market: ${symbol}`);
   }
 
   handleConnection(socket: Socket) {
@@ -226,7 +236,7 @@ export class SpotPublicGateway
 
       if (!token) {
         socket.disconnect();
-        this.logger.log(`🔴 Client disconnected: ${socket.id}`);
+        this.devLog(`🔴 Client disconnected (no token): ${socket.id}`);
         return;
       }
 
@@ -243,10 +253,12 @@ export class SpotPublicGateway
       }
 
       this.clients.set(user_id, socket);
-      this.logger.log(`🟢 Client connected: ${user_id}`);
+      this.devLog(`🟢 Client connected: userId=${user_id} socketId=${socket.id}`);
     } catch (error) {
       socket.disconnect();
-      this.logger.log(`🔴 catch Client disconnected: ${socket.id}`, error);
+      this.devLog(
+        `🔴 auth failed · socketId=${socket.id} · ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -264,7 +276,7 @@ export class SpotPublicGateway
       }
 
       this.clients.delete(user_id);
-      this.logger.log(`🔴 Client disconnected: ${user_id}`);
+      this.devLog(`🔴 Client disconnected: userId=${user_id}`);
     }
   }
 
@@ -272,7 +284,7 @@ export class SpotPublicGateway
     this.intervals.forEach((interval) => clearInterval(interval));
     this.eventEmitter.removeAllListeners();
     this.eventListeners = [];
-    this.logger.log('🧹 SpotPublicGateway destroyed');
+    this.devLog('🧹 SpotPublicGateway destroyed');
   }
 
   @SubscribeMessage(SpotEvent.JoinRoom)
@@ -290,7 +302,7 @@ export class SpotPublicGateway
         return;
       }
 
-      this.logger.log(`📥 Client ${user_id} joining ${room}`);
+      this.devLog(`📥 Client ${user_id} joining room=${room}`);
 
       this.clientRoom.set(user_id, room);
 
@@ -339,7 +351,7 @@ export class SpotPublicGateway
       }
 
       this.clientRoom.delete(user_id);
-      this.logger.log(`📤 Client ${user_id} left room ${room}`);
+      this.devLog(`📤 Client ${user_id} left room ${room}`);
     }
   }
 
@@ -355,7 +367,7 @@ export class SpotPublicGateway
 
       const symbol = this.clientRoom.get(user_id);
       if (!symbol) return;
-      this.logger.warn('join Timeframe');
+      this.devLog(`JoinTimeframe userId=${user_id} symbol=${symbol} interval=${data.interval}`);
 
       const { interval } = data;
       const existsInterval = this.roomTimeframes.get(symbol)?.has(interval);
@@ -385,7 +397,7 @@ export class SpotPublicGateway
       const symbol = this.clientRoom.get(user_id);
       if (!symbol) return;
       const { interval } = data;
-      this.logger.warn(`unsub Timeframe ${interval}`);
+      this.devLog(`LeaveTimeframe userId=${user_id} symbol=${symbol} interval=${interval}`);
       const existsInterval = this.roomTimeframes.get(symbol)?.has(interval);
       if (!existsInterval) return;
       const room = `${symbol}:${interval}`;
@@ -414,7 +426,9 @@ export class SpotPublicGateway
 
       const { interval, symbol } = data;
       if (this.roomClients.has(symbol)) {
-        this.logger.warn(`init candle for ${user_id}`);
+        this.devLog(
+          `InitCandle userId=${user_id} symbol=${symbol} interval=${interval}`,
+        );
 
         let candles: BaseCandleEntity[] = [];
         if (interval === '1m') {
@@ -495,8 +509,8 @@ export class SpotPublicGateway
       }
     }
 
-    this.logger.warn(
-      `📊 Broadcasted trade.match for ${symbol} to ${clients?.size || 0} clients`,
+    this.devLog(
+      `📊 Broadcast trade.match symbol=${symbol} roomClients=${clients?.size || 0}`,
     );
   }
 
@@ -511,8 +525,8 @@ export class SpotPublicGateway
       }
     }
 
-    this.logger.warn(
-      `📊 Broadcasted order:cancelOrder for to ${clients?.size || 0} clients`,
+    this.devLog(
+      `📊 Broadcast order:cancelOrder symbol=${room} roomClients=${clients?.size || 0}`,
     );
   }
 

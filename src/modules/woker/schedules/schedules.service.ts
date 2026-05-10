@@ -20,6 +20,7 @@ import { RedisTickerService } from 'src/modules/redis/services/redis.ticker.serv
 @Injectable()
 export class SpotSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(SpotSchedulerService.name);
+  private readonly isDev = process.env.NODE_ENV === 'development';
 
   constructor(
     private readonly dataSource: DataSource,
@@ -34,7 +35,7 @@ export class SpotSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    this.logger.warn('SpotSchedulerService initialized');
+    if (this.isDev) this.logger.debug('SpotSchedulerService initialized');
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -55,7 +56,7 @@ export class SpotSchedulerService implements OnModuleInit {
   // @Cron('*/10 * * * *')
   @Cron('0 0 * * *')
   async handleDailyTickerUpdate() {
-    console.log('🌙 run ticker job while 0h00');
+    if (this.isDev) this.logger.debug('🌙 run ticker job while 0h00');
     const marketTokens = await this.marketTokenService.getAll();
 
     for (const mt of marketTokens) {
@@ -93,7 +94,11 @@ export class SpotSchedulerService implements OnModuleInit {
           updatedAt: dayjs().toDate(),
         });
       } catch (error) {
-        console.error(`❌ Error with ${mt.symbol}:`, error.message);
+        if (this.isDev) {
+          this.logger.error(
+            `❌ Error with ${mt.symbol}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
     }
   }
@@ -133,7 +138,9 @@ export class SpotSchedulerService implements OnModuleInit {
         interval,
       );
       if (!candleRedis) {
-        this.logger.warn(`candleRedis of ${marketToken.symbol} not found`);
+        if (this.isDev) {
+          this.logger.warn(`candleRedis of ${marketToken.symbol} not found`);
+        }
         this.marketTokenService.initCandle(marketToken, '0');
         continue;
       }
