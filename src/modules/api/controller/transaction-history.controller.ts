@@ -6,6 +6,7 @@ import { AuthGuard } from '../guards/auth.guard';
 
 @ApiTags('transactions')
 @UseGuards(AuthGuard)
+@ApiBearerAuth()
 @Controller('transactions')
 export class TransactionHistoryController {
   constructor(
