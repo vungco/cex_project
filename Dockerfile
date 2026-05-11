@@ -2,21 +2,27 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
-COPY package*.json ./
+# Layer cache: reinstall only when lockfile changes
+COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY . .
+# Only files required for `nest build` (avoids huge invalidations from COPY .)
+COPY nest-cli.json tsconfig.json tsconfig.build.json ./
+COPY src ./src
+
 RUN npm run build
 
-# Stage 2: Runner
+# Drop devDependencies here so runner copies a single production tree
+RUN npm prune --omit=dev
+
+# Stage 2: Runner — no second `npm ci`
 FROM node:22-alpine AS runner
 WORKDIR /app
 
-COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-RUN npm ci --omit=dev
 
-ENV NODE_ENV=production
-EXPOSE 3000
+EXPOSE 8003
 
 CMD ["node", "dist/main.js"]

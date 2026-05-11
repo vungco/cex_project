@@ -18,6 +18,7 @@ import { TransactionHistoryController } from './controller/transaction-history.c
 import { KafkaSubscriberService } from './services/kafka-subscriber.service';
 import { WalletDepositKafkaHandler } from './services/deposit.service';
 import { WalletDepositKafkaController } from './controller/wallet-deposit.kafka.controller';
+import { LoggerModule } from '../logger/logger.module';
 
 const controllers = [
   AuthController,
@@ -44,6 +45,7 @@ const services = [AuthService, KafkaSubscriberService, WalletDepositKafkaHandler
       signOptions: { expiresIn: '7d' },
     }),
     GatewayModule,
+    LoggerModule,
   ],
   controllers: [...controllers],
   providers: [...services],

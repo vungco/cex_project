@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  Logger,
   OnModuleDestroy,
   OnModuleInit,
   UseGuards,
@@ -32,6 +31,7 @@ import { RedisBaseService } from 'src/modules/redis/services/redis.base.service'
 import { RedisOrderBookService } from 'src/modules/redis/services/redis.orderbook.service';
 import { RedisCandleService } from 'src/modules/redis/services/redis.candle.service';
 import { RedisTickerService } from 'src/modules/redis/services/redis.ticker.service';
+import { AppLogger } from 'src/modules/logger/app-logger.service';
 import {
   EmitResponHistoryDto,
   WithdrawalUpdatedEmitDto,
@@ -67,8 +67,6 @@ export class SpotPublicGateway
   @WebSocketServer()
   server: Server;
 
-  private readonly logger = new Logger(SpotPublicGateway.name);
-
   /** Bật log chi tiết WS/Redis: development, hoặc `SPOT_WS_DEBUG=1|true` (tạm prod). */
   private readonly devWsLogEnabled =
     process.env.NODE_ENV === 'development' ||
@@ -76,7 +74,26 @@ export class SpotPublicGateway
     process.env.SPOT_WS_DEBUG === 'true';
 
   private devLog(message: string): void {
-    if (this.devWsLogEnabled) this.logger.log(`[dev-ws] ${message}`);
+    if (this.devWsLogEnabled) this.appLogger.log(`[dev-ws] ${message}`);
+  }
+
+  private devLogMeta(message: string, meta?: Record<string, unknown>): void {
+    if (!this.devWsLogEnabled) return;
+    this.appLogger.log(`[dev-ws] ${message}`, meta);
+  }
+
+  private summarizeCandlePayload(data: CandleData): Record<string, unknown> {
+    const d = data as any;
+    return {
+      startTime: d?.startTime ?? d?.start_time,
+      endTime: d?.endTime ?? d?.end_time,
+      o: d?.o,
+      h: d?.h,
+      l: d?.l,
+      c: d?.c,
+      volume: d?.volume,
+      tradeCount: d?.tradeCount ?? d?.trades_count,
+    };
   }
 
   private clients: Map<string, Socket> = new Map();
@@ -91,6 +108,7 @@ export class SpotPublicGateway
   private readonly DEFAULT_INTERVAL = 1000; // ms
 
   constructor(
+    private readonly appLogger: AppLogger,
     private readonly redisService: RedisBaseService,
     private readonly redisOrderBookService: RedisOrderBookService,
     private readonly redisCandleService: RedisCandleService,
@@ -158,7 +176,7 @@ export class SpotPublicGateway
         this.broadcastOrderCancel(data);
         // this.logger.log('📡 Subscribed to Redis channel: trade.match');
       } catch (err) {
-        this.logger.error(`Error parsing trade.match event: ${err.message}`);
+        this.appLogger.error(`Error parsing trade.match event: ${err.message}`);
       }
     });
   }
@@ -170,7 +188,7 @@ export class SpotPublicGateway
         this.broadcastTradeMatch(data);
         // this.logger.log('📡 Subscribed to Redis channel: trade.match');
       } catch (err) {
-        this.logger.error(`Error parsing trade.match event: ${err.message}`);
+        this.appLogger.error(`Error parsing trade.match event: ${err.message}`);
       }
     });
   }
@@ -189,9 +207,7 @@ export class SpotPublicGateway
               const data = JSON.parse(message);
               this.broadcastCandles(room, interval, data);
             } catch (err) {
-              this.logger.error(
-                `Error parsing trade.match event: ${err.message}`,
-              );
+              this.appLogger.error(`Error parsing candle event: ${err.message}`);
             }
           },
         );
@@ -213,9 +229,7 @@ export class SpotPublicGateway
             this.broadcastTicker(room, data);
             // this.logger.warn('📡 Subscribed to Redis channel: spot_ticker');
           } catch (err) {
-            this.logger.error(
-              `Error parsing spot:ticker event: ${err.message}`,
-            );
+            this.appLogger.error(`Error parsing ticker event: ${err.message}`);
           }
         },
       );
@@ -311,9 +325,7 @@ export class SpotPublicGateway
       if (!this.intervals.has(room)) {
         const timer = setInterval(() => {
           this.updateOrderbook(room, symbol).catch((err) => {
-            this.logger.error(
-              `Error updating orderbook for ${room}: ${err.message}`,
-            );
+            this.appLogger.error(`Error updating orderbook: ${err.message}`);
           });
         }, this.DEFAULT_INTERVAL);
 
@@ -446,7 +458,13 @@ export class SpotPublicGateway
           interval,
         );
 
+        this.devLog(
+          `⬆️ emit init candles userId=${user_id} socketId=${socket.id} symbol=${symbol} interval=${interval} candles=${candles?.length || 0}`,
+        );
         socket.emit(SpotEvent.InitCandle, candles);
+        this.devLog(
+          `⬆️ emit timeframe userId=${user_id} socketId=${socket.id} symbol=${symbol} interval=${interval} hasRedis=${Boolean(candleRedis)}`,
+        );
         socket.emit(SpotEvent.Timeframe, candleRedis);
       }
     }
@@ -469,6 +487,9 @@ export class SpotPublicGateway
 
       const tickerRedis = await this.redisTickerService.getTicker(symbol);
 
+      this.devLog(
+        `⬆️ emit initTicker userId=${user_id} socketId=${socket.id} symbol=${symbol} hasRedis=${Boolean(tickerRedis)}`,
+      );
       socket.emit(SpotEvent.INITTICKER, tickerRedis);
     }
   }
@@ -479,7 +500,25 @@ export class SpotPublicGateway
   private broadcastCandles(symbol: string, interval: string, data: CandleData) {
     const room = `${symbol}:${interval}`;
     const clients = this.roomTimeframeClients.get(room);
-    if (!clients) return;
+
+    this.devLogMeta('📊 broadcastCandles() enter', {
+      symbol,
+      interval,
+      room,
+      roomClients: clients?.size ?? 0,
+      payload: this.summarizeCandlePayload(data),
+    });
+
+    if (!clients || clients.size === 0) {
+      this.devLogMeta('📭 broadcastCandles() no clients', {
+        symbol,
+        interval,
+        room,
+        roomClients: clients?.size ?? 0,
+        payload: this.summarizeCandlePayload(data),
+      });
+      return;
+    }
 
     for (const clientId of clients) {
       const client = this.clients.get(clientId);
@@ -487,6 +526,13 @@ export class SpotPublicGateway
         client.emit(SpotEvent.Timeframe, data);
       }
     }
+
+    this.devLogMeta('✅ broadcastCandles() emitted', {
+      symbol,
+      interval,
+      room,
+      emittedTo: clients.size,
+    });
   }
 
   private broadcastTradeMatch(data: { symbol: string; trades: TradeEntity[] }) {
@@ -494,7 +540,22 @@ export class SpotPublicGateway
 
     const room = `${symbol}`;
     const clients = this.roomClients.get(room);
-    if (!clients) return;
+    this.devLogMeta('📊 broadcastTradeMatch() enter', {
+      symbol,
+      room,
+      roomClients: clients?.size ?? 0,
+      trades: trades?.length ?? 0,
+    });
+
+    if (!clients || clients.size === 0) {
+      this.devLogMeta('📭 broadcastTradeMatch() no clients', {
+        symbol,
+        room,
+        roomClients: clients?.size ?? 0,
+        trades: trades?.length ?? 0,
+      });
+      return;
+    }
     const userIds = new Set<string>();
 
     for (const trade of trades) {
@@ -509,15 +570,37 @@ export class SpotPublicGateway
       }
     }
 
-    this.devLog(
-      `📊 Broadcast trade.match symbol=${symbol} roomClients=${clients?.size || 0}`,
-    );
+    this.devLogMeta('✅ broadcastTradeMatch() emitted', {
+      symbol,
+      room,
+      emittedTo: clients.size,
+      userIds: userIds.size,
+    });
   }
 
   private broadcastOrderCancel(order: OrderEntity) {
     const room = `${order.market_token.symbol}`;
     const clients = this.roomClients.get(room);
-    if (!clients) return;
+    this.devLogMeta('📊 broadcastOrderCancel() enter', {
+      symbol: room,
+      room: room,
+      roomClients: clients?.size ?? 0,
+      orderId: (order as any)?.id,
+      status: (order as any)?.status,
+      side: (order as any)?.side,
+      price: (order as any)?.price,
+      amount: (order as any)?.amount,
+    });
+
+    if (!clients || clients.size === 0) {
+      this.devLogMeta('📭 broadcastOrderCancel() no clients', {
+        symbol: room,
+        room: room,
+        roomClients: clients?.size ?? 0,
+        orderId: (order as any)?.id,
+      });
+      return;
+    }
     for (const clientId of clients) {
       const client = this.clients.get(clientId);
       if (client) {
@@ -525,9 +608,12 @@ export class SpotPublicGateway
       }
     }
 
-    this.devLog(
-      `📊 Broadcast order:cancelOrder symbol=${room} roomClients=${clients?.size || 0}`,
-    );
+    this.devLogMeta('✅ broadcastOrderCancel() emitted', {
+      symbol: room,
+      room: room,
+      emittedTo: clients.size,
+      orderId: (order as any)?.id,
+    });
   }
 
   private async updateOrderbook(room: string, symbol: string): Promise<void> {
@@ -536,7 +622,25 @@ export class SpotPublicGateway
       this.DEFAULT_DEPTH,
     );
     const clients = this.roomClients.get(room);
-    if (!clients) return;
+    this.devLogMeta('📊 updateOrderbook() enter', {
+      symbol,
+      room,
+      roomClients: clients?.size ?? 0,
+      depth: this.DEFAULT_DEPTH,
+      // keep only sizes; orderbook can be large
+      bids: (orderbook as any)?.bids?.length ?? undefined,
+      asks: (orderbook as any)?.asks?.length ?? undefined,
+    });
+
+    if (!clients || clients.size === 0) {
+      this.devLogMeta('📭 updateOrderbook() no clients', {
+        symbol,
+        room,
+        roomClients: clients?.size ?? 0,
+        depth: this.DEFAULT_DEPTH,
+      });
+      return;
+    }
 
     for (const clientId of clients) {
       const client = this.clients.get(clientId);
@@ -546,13 +650,40 @@ export class SpotPublicGateway
         client.emit(SpotEvent.OrderbookUpdate, orderbook);
       }
     }
+
+    this.devLogMeta('✅ updateOrderbook() emitted', {
+      symbol,
+      room,
+      emittedTo: clients.size,
+    });
   }
 
   private broadcastTicker(symbol: string, data: tickerRedis) {
     const room = `${symbol}`;
     const clients = this.roomClients.get(room);
-    if (!clients) return;
     const ticker = this.convertTicker(data);
+
+    this.devLogMeta('📊 broadcastTicker() enter', {
+      symbol,
+      room,
+      roomClients: clients?.size ?? 0,
+      last: ticker.lastPrice,
+      changePercent: ticker.changePercent,
+      high24h: ticker.high24h,
+      low24h: ticker.low24h,
+      volumeBase: ticker.volumeBase,
+      volumeQuote: ticker.volumeQuote,
+    });
+
+    if (!clients || clients.size === 0) {
+      this.devLogMeta('📭 broadcastTicker() no clients', {
+        symbol,
+        room,
+        roomClients: clients?.size ?? 0,
+        last: ticker.lastPrice,
+      });
+      return;
+    }
 
     for (const clientId of clients) {
       const client = this.clients.get(clientId);
@@ -560,6 +691,12 @@ export class SpotPublicGateway
         client.emit(SpotEvent.Ticker, ticker);
       }
     }
+
+    this.devLogMeta('✅ broadcastTicker() emitted', {
+      symbol,
+      room,
+      emittedTo: clients.size,
+    });
   }
 
   private broadcastTickerSumary(data: Record<string, sumaryTicker>) {

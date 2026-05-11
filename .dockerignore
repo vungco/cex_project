@@ -1,0 +1,43 @@
+# Dependencies & build output (never send into build context)
+node_modules
+dist
+build
+.next
+.nuxt
+.cache
+
+# VCS & IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.cursor
+
+# Env & secrets (never bake into image)
+.env
+.env.*
+!.env.example
+
+# Tests & coverage (not needed for `nest build`)
+coverage
+.nyc_output
+test
+**/*.spec.ts
+**/*.e2e-spec.ts
+
+# Logs & OS noise
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# Docker / compose (avoid invalidating unrelated layers)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Docs & misc
+*.md
+LICENSE

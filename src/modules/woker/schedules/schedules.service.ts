@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { Candle1mEntity } from 'src/modules/database/entities/candles/candle_1m.entity';
@@ -16,13 +16,16 @@ import dayjs from 'dayjs';
 import { RedisBaseService } from 'src/modules/redis/services/redis.base.service';
 import { RedisCandleService } from 'src/modules/redis/services/redis.candle.service';
 import { RedisTickerService } from 'src/modules/redis/services/redis.ticker.service';
+import { AppLogger } from 'src/modules/logger/app-logger.service';
 
 @Injectable()
 export class SpotSchedulerService implements OnModuleInit {
-  private readonly logger = new Logger(SpotSchedulerService.name);
-  private readonly isDev = process.env.NODE_ENV === 'development';
+  private devDebug(message: string, meta?: Record<string, unknown>) {
+    this.appLogger.debug(`[worker] ${message}`, meta);
+  }
 
   constructor(
+    private readonly appLogger: AppLogger,
     private readonly dataSource: DataSource,
     private readonly marketTokenService: MarketTokenService,
     private readonly redisService: RedisBaseService,
@@ -35,28 +38,31 @@ export class SpotSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    if (this.isDev) this.logger.debug('SpotSchedulerService initialized');
+    this.devDebug('SpotSchedulerService initialized');
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handle1mCandle() {
+    this.devDebug('cron tick: handle1mCandle()');
     await this.handleCandle('1m');
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async handle5mCandle() {
+    this.devDebug('cron tick: handle5mCandle()');
     await this.handleCandle('5m');
   }
 
   @Cron('*/15 * * * *')
   async handle15mCandle() {
+    this.devDebug('cron tick: handle15mCandle()');
     await this.handleCandle('15m');
   }
 
   // @Cron('*/10 * * * *')
   @Cron('0 0 * * *')
   async handleDailyTickerUpdate() {
-    if (this.isDev) this.logger.debug('🌙 run ticker job while 0h00');
+    this.devDebug('🌙 run ticker job while 0h00');
     const marketTokens = await this.marketTokenService.getAll();
 
     for (const mt of marketTokens) {
@@ -94,11 +100,9 @@ export class SpotSchedulerService implements OnModuleInit {
           updatedAt: dayjs().toDate(),
         });
       } catch (error) {
-        if (this.isDev) {
-          this.logger.error(
-            `❌ Error with ${mt.symbol}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+        this.appLogger.error(`❌ Error with ${mt.symbol}`, {
+          err: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
@@ -126,6 +130,10 @@ export class SpotSchedulerService implements OnModuleInit {
 
   async handleCandle(interval: string) {
     const redis = this.redisService;
+    void redis; // keep reference; may be used later
+
+    const jobStartedAt = Date.now();
+    this.devDebug('handleCandle() start', { interval });
 
     const market_tokens = await this.marketTokenService.getAll();
     const candleRepo = this.getCandleRepository(interval);
@@ -133,20 +141,35 @@ export class SpotSchedulerService implements OnModuleInit {
     for (const marketToken of market_tokens) {
       if (!marketToken.isActive) continue;
       const symbol = marketToken.symbol;
+      const symbolStartedAt = Date.now();
+      this.devDebug('handleCandle() symbol start', { interval, symbol });
       const candleRedis = await this.redisCandleService.getCandle(
         symbol,
         interval,
       );
       if (!candleRedis) {
-        if (this.isDev) {
-          this.logger.warn(`candleRedis of ${marketToken.symbol} not found`);
-        }
+        this.appLogger.warn(`[worker] candleRedis not found`, {
+          interval,
+          symbol: marketToken.symbol,
+        });
         this.marketTokenService.initCandle(marketToken, '0');
         continue;
       }
       const market_token = await this.marketTokenService.findByName(symbol);
 
       // 1. final candle old
+      this.devDebug('closeCandle + upsert start', {
+        interval,
+        symbol,
+        startTime: candleRedis.startTime,
+        endTime: candleRedis.endTime,
+        o: candleRedis.o,
+        h: candleRedis.h,
+        l: candleRedis.l,
+        c: candleRedis.c,
+        volume: candleRedis.volume,
+        tradeCount: candleRedis.tradeCount,
+      });
       await Promise.all([
         this.redisCandleService.closeCandle(symbol, interval),
         candleRepo.upsert(
@@ -164,8 +187,19 @@ export class SpotSchedulerService implements OnModuleInit {
           ['market_token', 'start_time'],
         ),
       ]);
+      this.devDebug('closeCandle + upsert done', {
+        interval,
+        symbol,
+        tookMs: Date.now() - symbolStartedAt,
+      });
 
       // 2. create candle new
+      this.devDebug('updateCandle(new) start', {
+        interval,
+        symbol,
+        prevClose: candleRedis.c,
+        nowMs: dayjs().valueOf(),
+      });
       await this.redisCandleService.updateCandle(
         symbol,
         interval,
@@ -173,6 +207,16 @@ export class SpotSchedulerService implements OnModuleInit {
         '0',
         dayjs().valueOf(),
       );
+      this.devDebug('updateCandle(new) done', {
+        interval,
+        symbol,
+        tookMs: Date.now() - symbolStartedAt,
+      });
     }
+
+    this.devDebug('handleCandle() done', {
+      interval,
+      tookMs: Date.now() - jobStartedAt,
+    });
   }
 }
